@@ -1,0 +1,744 @@
+{
+  "name": "Amazon-refunds-n8n-deepseek",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        -16
+      ],
+      "id": "75399783-f329-4b4c-afff-b6fd1da8da52",
+      "name": "Daily Amazon orders sync"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "simple": false,
+        "filters": {
+          "q": "=from:auto-confirm@amazon.ca subject:\"Ordered:\""
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        64,
+        -16
+      ],
+      "id": "ceb4c218-058b-4be1-8f63-9dce90f8b053",
+      "name": "Fetch Amazon order emails",
+      "webhookId": "d0fa12cd-24ad-4d4f-bf97-2c1fcfae3b45",
+      "alwaysOutputData": true,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "InICULCJ8UuMa155",
+          "name": "choi3hr@gmail.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO products (product_name, product_url)\nVALUES (\n  {{ \"'\" + $json.product_name.replace(/'/g, \"''\") + \"'\" }},\n  {{ \"'\" + $json.product_url.replace(/'/g, \"''\") + \"'\" }}\n)\nON CONFLICT (product_url) DO UPDATE\nSET product_name = EXCLUDED.product_name\nRETURNING \n  id,\n  {{ $json.order_price }}::numeric AS order_price,\n  '{{ $json.order_date }}'::date AS order_date,\n  '{{ $json.order_number }}' AS order_number;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        624,
+        -16
+      ],
+      "id": "d1ebb54f-3605-4c14-a279-7b9122b59e99",
+      "name": "Upsert products",
+      "credentials": {
+        "postgres": {
+          "id": "RGebCQhCGKLhIuhc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO orders (\n  product_id,\n  order_price,\n  order_date,\n  order_number\n)\nVALUES (\n  {{ $json.id }},\n  {{ $json.order_price }},\n  '{{ new Date($json.order_date).toISOString().slice(0,10) }}',\n  '{{ $json.order_number }}'\n)\nON CONFLICT (product_id, order_date)\nDO UPDATE\nSET \n  order_price = EXCLUDED.order_price,\n  order_number = EXCLUDED.order_number\nRETURNING \n  id,\n  product_id,\n  order_price,\n  order_date,\n  order_number;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        848,
+        -16
+      ],
+      "id": "249c591b-7ffd-4aa5-a02b-bb86341e0b91",
+      "name": "Insert orders",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "RGebCQhCGKLhIuhc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 1
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        464
+      ],
+      "id": "84fc8f5a-2e4e-4168-bfd0-549c5e792b01",
+      "name": "Daily price check trigger"
+    },
+    {
+      "parameters": {
+        "url": "=http://host.docker.internal:5678/scrape?url={{$json[\"product_url\"]}}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 6000
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        512,
+        464
+      ],
+      "id": "b20ca575-0663-4266-871f-a5f147666fd3",
+      "name": "Scrape current Amazon prices",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE products\nSET \n    product_name = {{ $json[\"product_name\"] ? \"'\" + $json[\"product_name\"].replace(/'/g, \"''\") + \"'\" : \"NULL\" }},\n    current_price = {{ $json[\"price\"] !== undefined ? $json[\"price\"] : \"NULL\" }}::numeric\nWHERE product_url = {{ $json[\"url\"] ? \"'\" + $json[\"url\"].replace(/'/g, \"''\") + \"'\" : \"NULL\" }}\nRETURNING id, product_name, product_url, current_price;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1072,
+        448
+      ],
+      "id": "c23099de-8db8-45c6-9098-af824b294dc6",
+      "name": "Update product prices",
+      "credentials": {
+        "postgres": {
+          "id": "RGebCQhCGKLhIuhc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  o.id AS order_id,\n  o.order_number,\n  o.order_date,\n  o.order_price,\n  p.product_name,\n  p.product_url,\n  p.current_price,\n  ROUND(p.current_price * 1.13, 2) AS current_price_with_tax,\n  ROUND(o.order_price - (p.current_price * 1.13), 2) AS savings,\n  ROUND((EXTRACT(EPOCH FROM (NOW() - o.order_date)) / 86400)::numeric, 0) AS days_since_order,\n  GREATEST(30 - ROUND((EXTRACT(EPOCH FROM (NOW() - o.order_date)) / 86400)::numeric, 0), 0) AS days_remaining,\n  CASE \n    WHEN o.order_date >= NOW() - INTERVAL '30 days' THEN TRUE \n    ELSE FALSE \n  END AS eligible_for_refund\nFROM orders o\nJOIN products p ON o.product_id = p.id\nWHERE (p.current_price * 1.13) < o.order_price\n  AND o.order_date >= NOW() - INTERVAL '30 days';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1424,
+        448
+      ],
+      "id": "465947eb-f5f1-4281-830d-8389fa940357",
+      "name": "Fetch refund-eligible orders",
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "RGebCQhCGKLhIuhc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "79c3a811-6402-4c41-88c4-631fb3434907",
+              "leftValue": "={{$json[\"product_url\"]}}",
+              "rightValue": "http",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            },
+            {
+              "id": "97d2a8a7-1dc4-4df6-9c64-1e3a098bd05a",
+              "leftValue": "={{$json[\"product_url\"]}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        288,
+        464
+      ],
+      "id": "6b0d2ae1-7d6a-407c-b94d-1a81869678b0",
+      "name": "Only scrape valid product URLs"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "02f6bc30-a6c0-4cda-aa53-f2c67c666596",
+              "leftValue": "={{$json[\"data\"]}}",
+              "rightValue": "success",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        736,
+        464
+      ],
+      "id": "b2243fb2-57c1-422c-91a8-c1ce9964f606",
+      "name": "Only process successful scrapes"
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "products",
+          "mode": "list",
+          "cachedResultName": "products"
+        },
+        "returnAll": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        64,
+        464
+      ],
+      "id": "d6683246-541e-402f-81e2-837fbbd8117d",
+      "name": "Fetch products",
+      "credentials": {
+        "postgres": {
+          "id": "RGebCQhCGKLhIuhc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: item.json.output\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2144,
+        448
+      ],
+      "id": "68ee78e5-0c3e-48d0-8fac-85123c267e21",
+      "name": "Flatten JSON"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO refunds (\n  order_id,\n  refund_amount,\n  reason,\n  summary,\n  draft_message,\n  help_link,\n  current_price_with_tax\n)\nVALUES (\n  {{ $json.order_id }},\n  {{ $json.refund_amount }},\n  '{{ $json.reason.replace(/'/g, \"''\") }}',\n  '{{ $json.summary.replace(/'/g, \"''\") }}',\n  '{{ $json.draft_message.replace(/'/g, \"''\") }}',\n  '{{ $json.help_link.replace(/'/g, \"''\") }}',\n  {{ $json.current_price_with_tax }}\n)\nON CONFLICT (order_id) DO UPDATE\nSET\n  refund_amount = EXCLUDED.refund_amount,\n  reason = EXCLUDED.reason,\n  summary = EXCLUDED.summary,\n  draft_message = EXCLUDED.draft_message,\n  help_link = EXCLUDED.help_link,\n  current_price_with_tax = EXCLUDED.current_price_with_tax\nRETURNING\n  id,\n  order_id,\n  refund_amount,\n  reason,\n  summary,\n  draft_message,\n  help_link,\n  current_price_with_tax,\n  '{{ $json.product_name }}' AS product_name;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2368,
+        448
+      ],
+      "id": "bcc612ca-c6eb-440b-a986-66ed342e7f64",
+      "name": "Upsert refunds",
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "RGebCQhCGKLhIuhc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  // --- Get HTML and plain text ---\n  let html = item.json.textAsHtml || item.json.textHtml || \"\";\n  if (html.length < 2000 && item.json.html) {\n    html = item.json.html;\n  }\n\n  let plainText = item.json.text || \"\";\n\n  // --- Product name detection ---\n  let productName = \"(Unknown Product)\";\n  const asteriskMatch = plainText.match(/\\*\\s+([^\\n]+)/);\n  if (asteriskMatch && asteriskMatch[1].length > 5) {\n    productName = asteriskMatch[1].trim();\n  } else {\n    const nameMatch = html.match(/_asin_title[^>]*>([^<]+)</i);\n    if (nameMatch) productName = nameMatch[1].trim();\n    else {\n      const orderMatch = plainText.match(/order[,\\s]+([A-Z][^\\n]+?)(?:\\n|Quantity)/i);\n      if (orderMatch) productName = orderMatch[1].trim();\n    }\n  }\n\n  // --- Product URL via ASIN ---\n  let productUrl = \"(No ASIN found)\";\n  const asinMatch = html.match(/%2Fdp%2F([A-Z0-9]{10})|\\/dp\\/([A-Z0-9]{10})/i);\n  if (asinMatch) {\n    const asin = asinMatch[1] || asinMatch[2];\n    productUrl = `https://www.amazon.ca/dp/${asin}`;\n  }\n\n  // --- Order price ---\n  let orderPrice = 0;\n  const priceMatch = html.match(/Total[^0-9]*([\\d.,]+)\\s*CAD|\\$(\\d+\\.\\d{2})/i);\n  if (priceMatch) {\n    orderPrice = parseFloat((priceMatch[1] || priceMatch[2]).replace(\",\", \"\"));\n  }\n\n  // --- Order date ---\n  let orderDate = null;\n  if (item.json.date) {\n    orderDate = new Date(item.json.date).toISOString().split(\"T\")[0];\n  } else {\n    const headers = item.json.payload?.headers || [];\n    const subjectHeader = headers.find(h => h.name.toLowerCase() === \"subject\");\n    if (subjectHeader?.value) {\n      const dateMatch = subjectHeader.value.match(/(\\d{4}-\\d{2}-\\d{2})/);\n      if (dateMatch) orderDate = dateMatch[1];\n    }\n    if (!orderDate) {\n      const dateHeader = headers.find(h => h.name.toLowerCase() === \"date\");\n      if (dateHeader?.value) orderDate = new Date(dateHeader.value).toISOString().split(\"T\")[0];\n      else if (item.json.internalDate)\n        orderDate = new Date(parseInt(item.json.internalDate)).toISOString().split(\"T\")[0];\n    }\n  }\n\n  // --- Extract Amazon Order Number ---\n  let orderNumber = null;\n  // Try plain text first (e.g., \"Order # 702-3730070-3705001\")\n  const orderNumMatch = plainText.match(/Order\\s*#\\s*([0-9\\-]+)/i);\n  if (orderNumMatch) {\n    orderNumber = orderNumMatch[1];\n  } else {\n    // Try HTML backup\n    const htmlOrderMatch = html.match(/Order\\s*#\\s*([0-9\\-]+)/i);\n    if (htmlOrderMatch) {\n      orderNumber = htmlOrderMatch[1];\n    }\n  }\n\n  // --- Return parsed JSON ---\n  return {\n    json: {\n      product_name: productName,\n      product_url: productUrl,\n      order_price: orderPrice,\n      order_date: orderDate || new Date().toISOString().split(\"T\")[0],\n      order_number: orderNumber || \"(Unknown Order Number)\"\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        -16
+      ],
+      "id": "124641d8-2850-431f-a869-94895f237b94",
+      "name": "Extract Amazon order details"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  r.id AS refund_id,\n  r.order_id,\n  o.order_price,\n  o.order_date,\n  p.product_name,\n  p.product_url,\n  r.current_price_with_tax,\n  r.refund_amount,\n  r.reason,\n  r.summary,\n  r.draft_message,\n  r.help_link,\n  ROUND(EXTRACT(EPOCH FROM (NOW() - o.order_date)) / 86400) AS days_since_order,\n  GREATEST(30 - ROUND(EXTRACT(EPOCH FROM (NOW() - o.order_date)) / 86400), 0) AS days_remaining\nFROM refunds r\nJOIN orders o ON r.order_id = o.id\nJOIN products p ON o.product_id = p.id;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2592,
+        448
+      ],
+      "id": "f6f721d5-b0bf-45f4-96dc-1099d7841028",
+      "name": "Fetch refund details",
+      "credentials": {
+        "postgres": {
+          "id": "RGebCQhCGKLhIuhc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "hyerin.choi.stuff@gmail.com",
+        "subject": "={{ \"💸 Amazon Price Drop Alert: $\" + $json.refund_amount + \" refund available for \" + $json.product_name }}",
+        "message": "=<div style=\"font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #222; line-height: 1.45;\">\n  <p>\n    <b>🛍️ Product:</b> {{ $json.product_name || \"Your Amazon Order\" }}\n  </p>\n\n  <h3 style=\"font-size: 13px; margin-top: 14px;\">💰 Price Comparison:</h3>\n  <ul style=\"font-size: 13px; padding-left: 18px; margin-top: 4px;\">\n    <li><b>💵 You paid:</b> ${{ $json.order_price }}</li>\n    <li><b>🏷️ Current price (with 13% tax):</b> ${{ $json.current_price_with_tax }}</li>\n    <li><b>🎁 Potential refund:</b> ${{ $json.refund_amount }}</li>\n  </ul>\n\n  <h3 style=\"font-size: 13px; margin-top: 14px;\">⏳ Refund Window Status:</h3>\n  <ul style=\"font-size: 13px; padding-left: 18px; margin-top: 4px;\">\n    <li><b>📦 Ordered:</b> {{ $json.days_since_order }} days ago</li>\n    <li>\n      <b>🗓️ Days remaining:</b>\n      {{ $json.days_remaining < 5 \n          ? `<span style=\"color:#d93025; font-weight:bold;\">⚠️ ${$json.days_remaining} days (URGENT)</span>` \n          : `${$json.days_remaining} days`\n      }}\n    </li>\n    <li><b>🧾 Status:</b> {{ $json.days_remaining > 0 ? \"✅ Within 30-day refund window\" : \"❌ Expired refund window\" }}</li>\n  </ul>\n\n  <p>\n    <b>🔗 Product Link:</b>\n    <a href=\"{{ $json.product_url }}\" target=\"_blank\" style=\"color:#0073e6; text-decoration:none;\">\n      {{ $json.product_url }}\n    </a>\n  </p>\n\n  <p>\n    <b>🚀 Action Required:</b> Please initiate a refund request immediately to recover \n    <b>${{ $json.refund_amount }}</b>.\n  </p>\n\n  <hr style=\"border: none; border-top: 1px solid #ddd; margin: 14px 0;\">\n\n  <h4 style=\"font-size: 13px; margin-bottom: 4px;\">📝 Draft Message:</h4>\n  <p style=\"font-style: italic;\">{{ $json.draft_message }}</p>\n\n  <hr style=\"border: none; border-top: 1px solid #ddd; margin: 14px 0;\">\n\n  <p>\n    🛠️ <b>Amazon Refund Support Link:</b>\n    <a href=\"{{ $json.help_link }}\" target=\"_blank\" style=\"color:#0073e6; text-decoration:none;\">\n      Open Amazon Help Page\n    </a>\n  </p>\n\n  <hr style=\"border: none; border-top: 1px solid #ddd; margin: 14px 0;\">\n\n  <p style=\"font-size: 12px; color: #777;\">\n    💡 This refund opportunity was automatically detected and saved to your database.<br>\n  </p>\n</div>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2816,
+        448
+      ],
+      "id": "569ca245-2bf8-4857-93ab-6123a8778c06",
+      "name": "Send refund notification email",
+      "webhookId": "8200d74e-39dc-44bf-bf20-142502aa16ba",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "0LtgVd3zBK6fmLWI",
+          "name": "dev@choihyerin.com"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an intelligent Amazon Refund Agent specializing in post-purchase refund checks.\n\nYou must output **only valid JSON** matching the required schema — no explanations, no Markdown, and no extra wrapping like {\"output\": {...}}.\n\nHere is the order data (in JSON format):\n{{ JSON.stringify($json, null, 2) }}\n\nFollow these instructions carefully:\n\n1. Copy `order_id`, `order_number`, and `product_name` directly from the input JSON.\n2. Compare `order_price` and `current_price_with_tax`.\n3. If `current_price_with_tax` < `order_price` AND `days_remaining` > 0, set `\"eligible\": true`, otherwise false.\n4. Calculate `\"refund_amount\"` = order_price - current_price_with_tax.\n5. Write a concise `\"reason\"` explaining the price drop, how many days since purchase, and how many days remain.\n6. Write a `\"summary\"` line that includes the order number, refund amount, and days remaining.\n7. Write a `\"draft_message\"` using this exact format:\n\n\"Hi there! I recently purchased the {{product_name}} (Order #{{order_number}}) and I noticed that its price has dropped by ${{refund_amount}} since my purchase. Since it's still within the refund eligibility period, could you please help issue a refund for the price difference or process a return? Thanks so much for your help!\"\n\n8. Always include `\"help_link\": \"https://www.amazon.ca/hz/contact-us/\"`.\n\nReturn **only valid JSON** that exactly matches this schema:\n{\n  \"order_id\": number,\n  \"order_number\": string,\n  \"product_name\": string,\n  \"eligible\": true | false,\n  \"current_price_with_tax\": number,\n  \"refund_amount\": number,\n  \"reason\": \"string\",\n  \"summary\": \"string\",\n  \"draft_message\": \"string\",\n  \"help_link\": \"https://www.amazon.ca/hz/contact-us/\"\n}",
+        "hasOutputParser": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        1744,
+        448
+      ],
+      "id": "eeb112b6-1b66-4827-a1da-5d32ab0465de",
+      "name": "Refund evaluator"
+    },
+    {
+      "parameters": {
+        "content": "## Pull in new Amazon orders\n### Automatically retrieves my latest Amazon order emails each day, extracts key details like product name, price, and order number, and formats them for database storage.",
+        "height": 432,
+        "width": 736,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -256,
+        -208
+      ],
+      "typeVersion": 1,
+      "id": "6dfba81f-af6d-469a-92c6-7f73259809b9",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Log new Amazon orders\n### Stores the extracted order data into a PostgreSQL database. Updates existing products with new prices or changes, and logs every purchase for a complete record of my order history.",
+        "height": 432,
+        "width": 544,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        512,
+        -208
+      ],
+      "typeVersion": 1,
+      "id": "9c83b5ff-a581-44ed-85e3-c0927543a28b",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Watch for daily price drops\n### Runs every day to pull all stored products and check their current prices on Amazon. Only valid URLs are scraped, and failed or duplicate scrapes are skipped automatically.",
+        "height": 432,
+        "width": 1184,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -256,
+        272
+      ],
+      "typeVersion": 1,
+      "id": "2bfadbf1-49b3-4f18-9ed8-dfea0258d67b",
+      "name": "Sticky Note2",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## Refresh product data\n### Keeps product prices up to date in the database for accurate daily comparisons.",
+        "height": 432,
+        "width": 320,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        960,
+        272
+      ],
+      "typeVersion": 1,
+      "id": "707fd44b-e8c0-4738-97c2-0fb77731e85f",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "## Find refund-eligible orders\n### Finds orders where the current Amazon price has dropped below the original purchase price. These records are flagged and passed to DeepSeek for evaluation.",
+        "height": 432,
+        "width": 336,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1312,
+        272
+      ],
+      "typeVersion": 1,
+      "id": "b87ab624-d0d1-4c2e-b186-234fd90baa66",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "content": "## Evaluate and generate refund drafts\n### Uses DeepSeek to analyze eligible orders, calculate refund amounts, and generate clear summaries and refund request drafts.",
+        "height": 688,
+        "width": 352,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        1680,
+        176
+      ],
+      "typeVersion": 1,
+      "id": "e1b0fabe-0be1-4805-b944-05257828bae3",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "content": "## Store results and notify\n### Saves approved refund results to the database, retrieves the final summaries, and automatically sends an email notification with refund details and a prewritten message I can use to request the refund.",
+        "height": 432,
+        "width": 960,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        2064,
+        272
+      ],
+      "typeVersion": 1,
+      "id": "d3fd1083-dff1-44ac-8f0b-b41954f9fd2a",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "options": {
+          "maxTokens": -1,
+          "temperature": 2
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        1744,
+        672
+      ],
+      "id": "a1453776-0607-4f8e-b214-bc5a6702377a",
+      "name": "DeepSeek chat model",
+      "credentials": {
+        "deepSeekApi": {
+          "id": "N5xQBVEMoqokNsVD",
+          "name": "DeepSeek account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"order_id\": { \"type\": \"number\" },\n    \"order_number\": { \"type\": \"string\" },\n    \"product_name\": { \"type\": \"string\" },\n    \"eligible\": { \"type\": \"boolean\" },\n    \"current_price_with_tax\": { \"type\": \"number\" },\n    \"refund_amount\": { \"type\": \"number\" },\n    \"reason\": { \"type\": \"string\" },\n    \"summary\": { \"type\": \"string\" },\n    \"draft_message\": { \"type\": \"string\" },\n    \"help_link\": {\n      \"type\": \"string\",\n      \"enum\": [\"https://www.amazon.ca/hz/contact-us/\"]\n    }\n  },\n  \"required\": [\n    \"order_id\",\n    \"order_number\",\n    \"product_name\",\n    \"eligible\",\n    \"current_price_with_tax\",\n    \"refund_amount\",\n    \"reason\",\n    \"summary\",\n    \"draft_message\",\n    \"help_link\"\n  ]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1888,
+        672
+      ],
+      "id": "c0ea71f0-2480-4135-9159-744f7e396dcf",
+      "name": "Structured output parser"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily Amazon orders sync": {
+      "main": [
+        [
+          {
+            "node": "Fetch Amazon order emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Amazon order emails": {
+      "main": [
+        [
+          {
+            "node": "Extract Amazon order details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert products": {
+      "main": [
+        [
+          {
+            "node": "Insert orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily price check trigger": {
+      "main": [
+        [
+          {
+            "node": "Fetch products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape current Amazon prices": {
+      "main": [
+        [
+          {
+            "node": "Only process successful scrapes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update product prices": {
+      "main": [
+        [
+          {
+            "node": "Fetch refund-eligible orders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only scrape valid product URLs": {
+      "main": [
+        [
+          {
+            "node": "Scrape current Amazon prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Only process successful scrapes": {
+      "main": [
+        [
+          {
+            "node": "Update product prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch refund-eligible orders": {
+      "main": [
+        [
+          {
+            "node": "Refund evaluator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch products": {
+      "main": [
+        [
+          {
+            "node": "Only scrape valid product URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten JSON": {
+      "main": [
+        [
+          {
+            "node": "Upsert refunds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert refunds": {
+      "main": [
+        [
+          {
+            "node": "Fetch refund details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Amazon order details": {
+      "main": [
+        [
+          {
+            "node": "Upsert products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch refund details": {
+      "main": [
+        [
+          {
+            "node": "Send refund notification email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refund evaluator": {
+      "main": [
+        [
+          {
+            "node": "Flatten JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek chat model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Refund evaluator",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured output parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Refund evaluator",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "2daa90a4-4aef-49e0-875e-5ffcfcf0e46f",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "67704593ba1772dea616f1e97541a0245892c5c6cc825fbdd0daf9f2d10380f6"
+  },
+  "id": "nbTUWiax5w7sze4x",
+  "tags": []
+}
