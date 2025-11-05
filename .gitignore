@@ -137,3 +137,10 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# n8n and Docker-specific ignores
+.env
+n8n_data/
+postgres_data/
+*.sqlite
+*.log
