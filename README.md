@@ -6,6 +6,8 @@ Built using [n8n](https://n8n.io/), [DeepSeek](https://www.deepseek.com/), and P
 
 ## Overview
 
+![Workflow Diagram](assets/amazon-refunds-n8n-deepseek.png)
+
 Sometimes you buy something on Amazon, only to see it cheaper a week later.  
 Amazon does not automatically refund you the difference, but if you catch it within the 30-day return window, you can usually request one.
 
